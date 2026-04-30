@@ -15,10 +15,13 @@ const PLAYER_SPEED = 96; // px/sec — one tile takes ~167ms
 type RemotePlayer = {
   sprite: Phaser.GameObjects.Sprite;
   nameLabel: Phaser.GameObjects.Text;
+  spriteId: string;
   pixelX: number;
   pixelY: number;
   targetX: number;
   targetY: number;
+  moving: boolean;
+  direction: string;
 };
 
 export class GameScene extends Phaser.Scene {
@@ -31,6 +34,7 @@ export class GameScene extends Phaser.Scene {
   private playerTileX = 5;
   private playerTileY = 5;
   private moving = false;
+  private wasStopped = true;
   private moveTarget = { x: 0, y: 0 };
   private facingRow = 0; // 0=down 1=left 2=right 3=up
   private seq = 0;
@@ -198,10 +202,13 @@ export class GameScene extends Phaser.Scene {
     if (existing) {
       existing.targetX = px;
       existing.targetY = py;
+      existing.moving = state.moving;
+      existing.direction = state.direction;
       return;
     }
 
-    const sprite = this.add.sprite(px, py, "player").setDepth(9).setTint(0xaaddff);
+    registerAnimations(this, state.spriteId);
+    const sprite = this.add.sprite(px, py, state.spriteId).setDepth(9).setTint(0xaaddff);
     const label = this.add
       .text(px, py - 10, state.name, {
         fontSize: "5px",
@@ -215,10 +222,13 @@ export class GameScene extends Phaser.Scene {
     this.remotePlayers.set(state.characterId, {
       sprite,
       nameLabel: label,
+      spriteId: state.spriteId,
       pixelX: px,
       pixelY: py,
       targetX: px,
       targetY: py,
+      moving: state.moving,
+      direction: state.direction,
     });
   }
 
@@ -280,6 +290,7 @@ export class GameScene extends Phaser.Scene {
           y: nextY * TILE_SIZE + TILE_SIZE / 2,
         };
         this.moving = true;
+        this.wasStopped = false;
         this.playWalkAnim(dirRow);
 
         // Send move to server (client prediction — move is already applied locally)
@@ -289,6 +300,10 @@ export class GameScene extends Phaser.Scene {
         this.playIdleAnim(dirRow);
       }
     } else {
+      if (!this.wasStopped) {
+        this.ws?.send({ type: "stop", seq: this.seq });
+        this.wasStopped = true;
+      }
       this.playIdleAnim(this.facingRow);
     }
   }
@@ -310,6 +325,10 @@ export class GameScene extends Phaser.Scene {
 
   private interpolateRemotePlayers(delta: number) {
     const speed = PLAYER_SPEED * (delta / 1000);
+    const dirMap: Record<string, number> = { down: 0, left: 1, right: 2, up: 3 };
+    const animNames = ["walk_down", "walk_left", "walk_right", "walk_up"];
+    const idleNames = ["idle_down", "idle_left", "idle_right", "idle_up"];
+
     for (const rp of this.remotePlayers.values()) {
       const dx = rp.targetX - rp.pixelX;
       const dy = rp.targetY - rp.pixelY;
@@ -324,6 +343,12 @@ export class GameScene extends Phaser.Scene {
       }
       rp.sprite.setPosition(rp.pixelX, rp.pixelY);
       rp.nameLabel.setPosition(rp.pixelX, rp.pixelY - 10);
+
+      const dirRow = dirMap[rp.direction] ?? 0;
+      const key = rp.moving
+        ? animKey(rp.spriteId, animNames[dirRow])
+        : animKey(rp.spriteId, idleNames[dirRow]);
+      if (rp.sprite.anims.currentAnim?.key !== key) rp.sprite.play(key, true);
     }
   }
 
